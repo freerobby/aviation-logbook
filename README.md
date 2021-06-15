@@ -1,4 +1,4 @@
-# aviation-checklist
+# aviation-logbook
 
 ## Project setup
 ```

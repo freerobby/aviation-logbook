@@ -1,74 +1,29 @@
 <template>
   <div>
     <div id="header">
-      <h1>Aviation Checklist Creator</h1>
-      <div class="instructions">
-        <ol>
-          <li>
-            Write your checklist in the following format:
-            <pre>
-# Name of Section
-
-## Name of Checklist 1
-
-* Item 1: Action to Perform
-* Item 2: Action to Perform
-
-## Name of Checklist 2
-
-* Item 1: Action to Perform
-* Item 2: Action to Perform
-            </pre>
-          </li>
-          <li>This tool will render your checklist to CSV, Dynon, and PDF.</li>
-        </ol>
-      </div>
-      <div id="editor">
-        <div v-if="checklistSets.length === 0">
-        <p>
-          Want a demo? Use
-          <strong><a href="#" v-on:click="loadCSVFromWebURL('/assets/checklists/n934gr.md')">my checklist</a></strong>, make changes, and watch them update.
-        </p>
-        </div>
-        <textarea rows="16" cols="62" v-model="user_raw_data" style="overflow-y:scroll;">
-        </textarea>
-      </div>
+      <h1>Aviation Logbook Printer</h1>
       <div id="right-pane">
-        <div class="file_container" v-on:drop.prevent="importFile" v-on:dragover.prevent>
-          <p>Have your own file? Drag it here to import it.</p>
-        </div>
-        <div v-if="checklistSets.length > 0">
-          <p><strong>Download</strong></p>
-          <ul>
-            <li>
-              <a href="#" v-on:click="onDownloadMarkdown">Original</a> (for re-importing later)
-            </li>
-            <li>
-              <a href="#" v-on:click="onDownloadCSV">CSV</a>
-            </li>
-            <li>
-              <a href="#" v-on:click="onDownloadDynon">Dynon</a>
-            </li>
-            <li>Use print dialog to save to PDF (3 sections per page).</li>
-            <li>
-              Want another format? Let me know at robby@freerobby.com.
-            </li>
-          </ul>
+        <div class="file_container" v-on:drop.prevent="importFile" v-on:dragover.prevent v-if="flights.length === 0">
+          <p>Drag your logbook export here.</p>
         </div>
       </div>
+      <p></p>
+
+      <flight-log-page
+          v-for="(flights_page, page_index) in flight_pages"
+          v-bind:page_number="page_index + 1"
+          v-bind:flights="flights_page"
+          v-bind:page_totals="flights_page_total(page_index)"
+          v-bind:amount_forward="flights_page_amount_forward(page_index)"
+          v-bind:total_to_date="flights_page_amount_forward(page_index + 1)"
+          v-bind:key="flights_page.id"
+      ></flight-log-page>
     </div>
-    <checklist-set
-        v-for="(checklistSet, index) in checklistSets"
-        v-bind:title="checklistSet.title"
-        v-bind:checklists="checklistSet.checklists"
-        v-bind:key="checklistSet.id"
-        v-bind:generated="(index === 0)?'Printed ' + formatted_date():''"
-    ></checklist-set>
   </div>
 </template>
 
 <script>
-import ChecklistSet from "@/components/ChecklistSet";
+import FlightLogPage from "@/components/FlightLogPage";
 
 import papa from "papaparse";
 
@@ -76,17 +31,14 @@ import papa from "papaparse";
 export default {
   name: 'App',
   components: {
-    ChecklistSet,
+    FlightLogPage
   },
   data() {
     return {
-      checklistSets: [],
-      user_raw_data: ''
+      flights: [],
+      flight_pages: [],
+      user_raw_data: '',
     }
-  },
-  beforeMount() {
-    if (localStorage.getItem("user_raw_data") !== null)
-      this.user_raw_data = localStorage.getItem("user_raw_data");
   },
   methods: {
     formatted_date: function() {
@@ -102,119 +54,176 @@ export default {
         this.loadCSVFromRaw(content);
       }
     },
-    loadCSVFromWebURL: function(url) {
-      var handle = this;
-      var xhr = new XMLHttpRequest();
-      xhr.open("GET", url);
-      xhr.send(null);
-      xhr.onload = function() {
-        handle.loadCSVFromRaw(xhr.responseText)
-      }
-    },
     loadCSVFromRaw: function(data) {
       this.user_raw_data = data;
     },
-    initiatePlaintextDownload: function(filename, data) {
-      var link = document.createElement("a");
-      link.setAttribute("href", "data:text/plain;charset=utf-8," + encodeURIComponent(data));
-      link.setAttribute("download", filename)
-      link.style.display = "none";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    },
-    onDownloadCSV: function() {
-      this.initiatePlaintextDownload("checklist.csv", this.user_raw_data);
-    },
-    onDownloadDynon: function() {
-      var data = this.checklistSets;
-      var lines = [];
-      var num_checklists = 0;
-      for (var set = 0; set < data.length; set++) {
-        for (var checklist = 0; checklist < data[set].checklists.length; checklist++) {
-          lines.push("CHKLST" + (num_checklists).toString() + ".TITLE, " + data[set].title + ": " + data[set].checklists[checklist].title);
-          for (var i = 0; i < data[set].checklists[checklist].items.length; i++) {
-            if (data[set].checklists[checklist].items[i].operation !== undefined) {
-              lines.push(
-                  "CHKLST" +
-                  (num_checklists).toString() +
-                  ".LINE" + (i+1).toString() +
-                  ", " +
-                  data[set].checklists[checklist].items[i].subject +
-                  ": " +
-                  data[set].checklists[checklist].items[i].operation
-              );
-            }
-            else {
-              lines.push(
-                  "CHKLST" +
-                  (num_checklists).toString() +
-                  ".LINE" + (i+1).toString() +
-                  ", " +
-                  data[set].checklists[checklist].items[i].subject
-              );
-            }
-
-          }
-
-          num_checklists++;
-        }
+    getValueByHeader(headers, row, header) {
+      for (let i = 0; i < headers.length; i++) {
+        if (headers[i] === header)
+          return row[i]
       }
-
-      this.initiatePlaintextDownload("checklist.txt", lines.join("\n"));
+      return -1;
     },
-    onDownloadMarkdown: function() {
-      var data = this.checklistSets;
-      var lines = [];
-      for (var set = 0; set < data.length; set++) {
-        lines.push("# " + data[set].title);
-        lines.push("");
-        for (var checklist = 0; checklist < data[set].checklists.length; checklist++) {
-          lines.push("## " + data[set].checklists[checklist].title);
-          lines.push("");
-          for (var i = 0; i < data[set].checklists[checklist].items.length; i++) {
-            if (data[set].checklists[checklist].items[i].operation !== undefined) {
-              lines.push("* " + data[set].checklists[checklist].items[i].subject + ": " + data[set].checklists[checklist].items[i].operation);
-            }
-            else {
-              lines.push("* " + data[set].checklists[checklist].items[i].subject);
-            }
-          }
-          lines.push("");
-        }
+    getAircraftModelByID(aircraft_table, id) {
+      for (let i = 0; i < aircraft_table.length; i++) {
+        if (aircraft_table[i][0] === id)
+          return this.getValueByHeader(aircraft_table[0], aircraft_table[i], "Model");
       }
-      
-      this.initiatePlaintextDownload("checklist.md", lines.join("\n"));
+      return -1;
+    },
+    get_number_instrument_approaches: function(header_row, data_row) {
+      var count = 0;
+      while (count < 10 && this.getValueByHeader(header_row, data_row,"Approach" + (count + 1).toString()) !== "") {
+        count++;
+      }
+      return count;
     },
     handle_update_csv: function(results) {
       var csv_data = results.data
-      var checklist_sets = [];
-
-      var current_checklistset = null;
-      var current_checklist = null;
+      var aircraft_first_row = -1;
+      var aircraft_last_row = -1;
+      var flights_first_row = -1;
+      var flights_last_row = -1;
       for (let i = 0; i < csv_data.length; i++) {
-        if (csv_data[i].length < 2 && csv_data[i][0] === "") {
-          continue; // Skip partial lines.
-        }
-        if (csv_data[i][0] !== current_checklistset) {
-          checklist_sets.push({title: csv_data[i][0], checklists: []});
-          current_checklistset = csv_data[i][0];
-          current_checklist = null;
-        }
-        if (csv_data[i][1] !== current_checklist) {
-          checklist_sets.slice(-1)[0]['checklists'].push({title: csv_data[i][1], items: []})
-          current_checklist = csv_data[i][1];
-        }
-        checklist_sets.slice(-1)[0]['checklists'].slice(-1)[0].items.push({subject: csv_data[i][2], operation: csv_data[i][3]});
+        if (csv_data[i][0] === "Aircraft Table")
+          aircraft_first_row = i + 1;
+        else if (aircraft_first_row >= 0 && aircraft_last_row === -1 && csv_data[i][0] === "")
+          aircraft_last_row = i;
+        else if (csv_data[i][0] === "Flights Table")
+          flights_first_row = i + 1;
+        else if (flights_first_row >= 0 && flights_last_row === -1 && csv_data[i][0] === "")
+          flights_last_row = i;
+      }
+      var raw_aircraft = csv_data.slice(aircraft_first_row, aircraft_last_row);
+      var raw_flights = csv_data.slice(flights_first_row, flights_last_row);
+
+      for (let i = 0; i < raw_flights.length; i++) {
+        if (i === 0)
+          continue; // Skip header row
+
+        var aircraft_id = this.getValueByHeader(raw_flights[0], raw_flights[i], "AircraftID");
+        var night_time = this.getValueByHeader(raw_flights[0], raw_flights[i], "Night");
+        var total_time = this.getValueByHeader(raw_flights[0], raw_flights[i], "TotalTime");
+        var day_time = (total_time - night_time).toFixed(1);
+        this.flights.push({
+          actual_instrument: this.getValueByHeader(raw_flights[0], raw_flights[i], "ActualInstrument"),
+          aircraft_id: aircraft_id,
+          aircraft_model: this.getAircraftModelByID(raw_aircraft, aircraft_id),
+          amel: 0,
+          asel: this.getValueByHeader(raw_flights[0], raw_flights[i], "TotalTime"),
+          comments: this.getValueByHeader(raw_flights[0], raw_flights[i], "PilotComments").replaceAll("  ", ", "),
+          cross_country: this.getValueByHeader(raw_flights[0], raw_flights[i], "CrossCountry"),
+          date: Date.parse(this.getValueByHeader(raw_flights[0], raw_flights[i], "Date")),
+          day_landings: this.getValueByHeader(raw_flights[0], raw_flights[i], "DayLandingsFullStop"),
+          day_time: day_time,
+          dual: this.getValueByHeader(raw_flights[0], raw_flights[i], "DualReceived"),
+          from: this.getValueByHeader(raw_flights[0], raw_flights[i], "From"),
+          ground_trainer: this.getValueByHeader(raw_flights[0], raw_flights[i], "GroundTraining"),
+          night_landings: this.getValueByHeader(raw_flights[0], raw_flights[i], "NightLandingsFullStop"),
+          night_time: night_time,
+          number_instrument_approaches: this.get_number_instrument_approaches(raw_flights[0], raw_flights[i]),
+          pic: this.getValueByHeader(raw_flights[0], raw_flights[i], "PIC"),
+          route: this.getValueByHeader(raw_flights[0], raw_flights[i], "Route"),
+          simulated_instrument: this.getValueByHeader(raw_flights[0], raw_flights[i], "SimulatedInstrument"),
+          to: this.getValueByHeader(raw_flights[0], raw_flights[i], "To"),
+          total_time: total_time,
+        });
+      }
+      this.flights.reverse();
+
+      for (let i = 0; i < this.flights.length; i++) {
+        if (i % 7 === 0)
+          this.flight_pages.push([this.flights[i]]);
+        else
+          this.flight_pages[this.flight_pages.length - 1].push(this.flights[i]);
+      }
+    },
+    add_totals: function(t1, t2) {
+      return {
+        actual_instrument: t1.actual_instrument + t2.actual_instrument,
+        asel: t1.asel + t2.asel,
+        amel: t1.amel + t2.amel,
+        cross_country: t1.cross_country + t2.cross_country,
+        day_time: t1.day_time + t2.day_time,
+        day_landings: t1.day_landings + t2.day_landings,
+        dual: t1.dual + t2.dual,
+        ground_trainer: t1.ground_trainer + t2.ground_trainer,
+        night_time: t1.night_time + t2.night_time,
+        night_landings: t1.night_landings + t2.night_landings,
+        number_instrument_approaches: t1.number_instrument_approaches + t2.number_instrument_approaches,
+        pic: t1.pic + t2.pic,
+        simulated_instrument: t1.simulated_instrument + t2.simulated_instrument,
+        total_time: t1.total_time + t2.total_time
+      }
+    },
+    flights_page_amount_forward: function(flights_page_index) {
+      if (flights_page_index === 0) {
+        return {
+          actual_instrument: 0,
+          asel: 0,
+          amel: 0,
+          cross_country: 0,
+          day_time: 0,
+          day_landings: 0,
+          dual: 0,
+          ground_trainer: 0,
+          night_time: 0,
+          night_landings: 0,
+          number_instrument_approaches: 0,
+          pic: 0,
+          simulated_instrument: 0,
+          total_time: 0
+        };
+      }
+      else if (flights_page_index === 1) {
+        return this.flights_page_total(0);
+      }
+      else {
+        return this.add_totals(
+            this.flights_page_total(flights_page_index - 1),
+            this.flights_page_amount_forward(flights_page_index - 1)
+        );
+      }
+    },
+    flights_page_total: function(flights_page_index) {
+      var totals = {
+        actual_instrument: 0,
+        asel: 0,
+        amel: 0,
+        cross_country: 0,
+        day_time: 0,
+        day_landings: 0,
+        dual: 0,
+        ground_trainer: 0,
+        night_time: 0,
+        night_landings: 0,
+        number_instrument_approaches: 0,
+        pic: 0,
+        simulated_instrument: 0,
+        total_time: 0
+      };
+
+      for (let i = 0; i < this.flight_pages[flights_page_index].length; i++) {
+        totals.actual_instrument += (parseFloat(this.flight_pages[flights_page_index][i].actual_instrument) || 0.0);
+        totals.asel += (parseFloat(this.flight_pages[flights_page_index][i].asel) || 0.0);
+        totals.amel += (parseFloat(this.flight_pages[flights_page_index][i].amel) || 0.0);
+        totals.cross_country += (parseFloat(this.flight_pages[flights_page_index][i].cross_country) || 0.0);
+        totals.day_time += (parseFloat(this.flight_pages[flights_page_index][i].day_time) || 0.0);
+        totals.day_landings += (parseInt(this.flight_pages[flights_page_index][i].day_landings) || 0);
+        totals.dual += (parseFloat(this.flight_pages[flights_page_index][i].dual) || 0.0);
+        totals.ground_trainer += (parseFloat(this.flight_pages[flights_page_index][i].ground_trainer) || 0.0);
+        totals.night_time += (parseFloat(this.flight_pages[flights_page_index][i].night_time) || 0.0);
+        totals.night_landings += (parseInt(this.flight_pages[flights_page_index][i].night_landings) || 0);
+        totals.number_instrument_approaches += (parseInt(this.flight_pages[flights_page_index][i].number_instrument_approaches) || 0);
+        totals.pic += (parseFloat(this.flight_pages[flights_page_index][i].pic) || 0.0);
+        totals.simulated_instrument += (parseFloat(this.flight_pages[flights_page_index][i].simulated_instrument) || 0.0);
+        totals.total_time += (parseFloat(this.flight_pages[flights_page_index][i].total_time) || 0.0);
       }
 
-      this.checklistSets = checklist_sets;
+      return totals;
     },
     parse: function(raw) {
-      if (raw.substring(0, 1) === "#")
-        this.parse_md(raw);
-      else
-        this.parse_csv(raw);
+      this.parse_csv(raw);
     },
     parse_csv: function(raw) {
       var handle = this;
@@ -224,42 +233,9 @@ export default {
         }
       });
     },
-    parse_md: function(raw) {
-      var md_data = raw.split("\n");
-      var checklist_sets = [];
-
-      while (md_data.length > 0) {
-        var row = md_data.shift();
-        if (row.substring(0,2) === "# ") {
-          checklist_sets.push({title: row.substring(2), checklists: []});
-        }
-        else if (row.substring(0,3) === "## ") {
-          checklist_sets.slice(-1)[0]['checklists'].push({title: row.substring(3), items: []})
-        }
-        else if (row.substring(0, 2) === "* ") {
-          var index = row.indexOf(": ");
-          if (index >= 0) {
-            checklist_sets.slice(-1)[0]['checklists'].slice(-1)[0].items.push({
-              subject: row.substring(2, index),
-              operation: row.substring(index + 2)
-            });
-          }
-          else {
-            checklist_sets.slice(-1)[0]['checklists'].slice(-1)[0].items.push({
-              subject: row.substring(2)
-            })
-          }
-        }
-      }
-
-      this.checklistSets = checklist_sets;
-    }
   },
   watch: {
     user_raw_data: function(newVal) {
-      if (newVal !== "") {
-        localStorage.setItem("user_raw_data", newVal);
-      }
       this.parse(newVal);
     }
   },
@@ -281,24 +257,16 @@ div {
     width: 100%;
     margin-bottom: 8px;
   }
-  div#right-pane, div .instructions, div#editor, div#upload {
+  div#right-pane {
     float: left;
     display: block;
-    width: 33%;
+    width: 100%;
   }
   div#right-pane .file_container {
     width: 90%;
     height: 50px;
     border: 2px dotted gray;
     text-align: center;
-  }
-}
-@media print {
-  div#header {
-    display: none;
-  }
-  div#right-pane, div .instructions, div#editor, div#upload {
-    display: none;
   }
 }
 </style>
